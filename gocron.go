@@ -1,27 +1,35 @@
+// Package gocron allows to regularly run a job, and to be notified,
+// when that run failed. Notifications can happen through e-mail, browser
+// notifications, or a local file.
 package gocron
 
 import (
 	"fmt"
 	"html/template"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/smtp"
+	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
-// TODO(mpl): write to tmp file if File == nil
+// TODO(mpl): docs
 
 type Cron struct {
 	Interval time.Duration
 	Job      func() error
 	Mail     *MailAlert
 	Notif    *Notification
-	File     *StaticFile // Path to a file where the alert will be written when the above methods fail.
+	File     *StaticFile
 }
 
 func (c *Cron) Run() {
+	// TODO(mpl): maybe give the option to not have a file? meh.
+	c.File = c.File.init()
 	c.Notif.init()
 	for {
 		if err := c.Job(); err != nil {
@@ -32,12 +40,18 @@ func (c *Cron) Run() {
 					log.Fatal(err)
 				}
 			}
-			if err := c.Notif.Send(); err != nil {
+			if err := c.Notif.Send(err); err != nil {
 				notiFail := fmt.Errorf("Could not open notification: %v", err)
 				if err := c.File.WriteAlert(notiFail); err != nil {
 					log.Fatal(err)
 				}
 			}
+			if err := c.File.WriteAlert(err); err != nil {
+				log.Fatal(err)
+			}
+		}
+		if c.Interval == 0 {
+			break
 		}
 		time.Sleep(c.Interval)
 	}
@@ -55,14 +69,11 @@ func (m *MailAlert) Msg() string {
 	return m.msg
 }
 
-// Send connects to the server at addr, authenticates with the
-// optional mechanism a if possible, and then sends an email from
-// address from, to addresses to, with message msg.
 func (m *MailAlert) Send(alert error) error {
 	if m == nil {
 		return nil
 	}
-	m.msg = fmt.Sprintf("%s\n\n%v", m.Subject, alert)
+	m.msg = fmt.Sprintf("Subject: %s\nFrom: %s\n\n%v", m.Subject, m.From, alert)
 
 	c, err := smtp.Dial(m.SMTP)
 	if err != nil {
@@ -97,9 +108,28 @@ type StaticFile struct {
 	Msg  string
 }
 
+func (s *StaticFile) init() *StaticFile {
+	if s == nil || s.Path == "" {
+		tempFile, err := ioutil.TempFile("", "gocron")
+		if err != nil {
+			log.Fatal("Could not create temp file for static file alerts: %v", err)
+		}
+		return &StaticFile{Path: tempFile.Name()}
+	}
+	return s
+}
+
 func (s *StaticFile) WriteAlert(err error) error {
 	s.Msg = fmt.Sprintf("%s\n\n%v", s.Msg, err)
-	return ioutil.WriteFile(s.Path, []byte(s.Msg), 0600)
+	f, err := os.OpenFile(s.Path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0700)
+	if err != nil {
+		return fmt.Errorf("could not open or create file %v: %v", s.Path, err)
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, strings.NewReader(s.Msg)); err != nil {
+		return fmt.Errorf("could not write message %v to file %v: %v", s.Msg, s.Path, err)
+	}
+	return nil
 }
 
 const idstring = "http://golang.org/pkg/http/#ListenAndServe"
@@ -107,15 +137,17 @@ const idstring = "http://golang.org/pkg/http/#ListenAndServe"
 var tpl *template.Template
 
 type Notification struct {
-	Host    string
-	Msg     string
-	Timeout time.Duration
+	Host     string
+	Msg      string
+	pageBody string
+	Timeout  time.Duration
 }
 
 func (n *Notification) init() {
 	if n == nil {
 		return
 	}
+	// TODO(mpl): reload template everytime with n.pageBody
 	tpl = template.Must(template.New("main").Parse(mainHTML(n)))
 	http.HandleFunc("/", mainHandler)
 	go func() {
@@ -125,10 +157,11 @@ func (n *Notification) init() {
 	}()
 }
 
-func (n *Notification) Send() error {
+func (n *Notification) Send(err error) error {
 	if n == nil {
 		return nil
 	}
+	n.pageBody = fmt.Sprintf("%v", err)
 	url := "http://" + n.Host
 	return exec.Command("xdg-open", url).Run()
 }
@@ -218,7 +251,8 @@ function notify() {
 
 	<a id="notifyLink" href="#" onclick="enableNotify();return false;">Enable notifications?</a>
 
-	<h2> Bazinga </h2>
+	<h2> ` + n.Msg + ` </h2>
+	` + n.pageBody + `
 	</body>
 </html>
 `
