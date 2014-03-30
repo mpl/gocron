@@ -17,6 +17,7 @@ import (
 	"time"
 )
 
+// TODO(mpl): Y U NO print job output?
 // TODO(mpl): docs
 
 type Cron struct {
@@ -120,7 +121,7 @@ func (s *StaticFile) init() *StaticFile {
 }
 
 func (s *StaticFile) WriteAlert(err error) error {
-	s.Msg = fmt.Sprintf("%s\n\n%v", s.Msg, err)
+	s.Msg = fmt.Sprintf("%s\n%v\n\n", s.Msg, err)
 	f, err := os.OpenFile(s.Path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0700)
 	if err != nil {
 		return fmt.Errorf("could not open or create file %v: %v", s.Path, err)
@@ -134,22 +135,47 @@ func (s *StaticFile) WriteAlert(err error) error {
 
 const idstring = "http://golang.org/pkg/http/#ListenAndServe"
 
-var tpl *template.Template
-
 type Notification struct {
-	Host     string
-	Msg      string
-	pageBody string
-	Timeout  time.Duration
+	Host          string
+	Msg           string
+	Timeout       time.Duration
+	tpl           *template.Template
+	pageBody      string
+	windowTimeout int64
+	notiTimeout   int64
+}
+
+func (n *Notification) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	data := struct {
+		Noti          string
+		Body          string
+		WindowTimeout int64
+		NotiTimeout   int64
+	}{
+		Noti:          n.Msg,
+		Body:          n.pageBody,
+		WindowTimeout: n.windowTimeout,
+		NotiTimeout:   n.notiTimeout,
+	}
+	w.Header().Set("Server", idstring)
+	if err := n.tpl.Execute(w, &data); err != nil {
+		log.Printf("Could not execute template: %v", err)
+	}
 }
 
 func (n *Notification) init() {
 	if n == nil {
 		return
 	}
-	// TODO(mpl): reload template everytime with n.pageBody
-	tpl = template.Must(template.New("main").Parse(mainHTML(n)))
-	http.HandleFunc("/", mainHandler)
+	n.windowTimeout = int64((n.Timeout + time.Duration(3)*time.Second) / time.Millisecond)
+	n.notiTimeout = int64(n.Timeout / time.Millisecond)
+
+	n.tpl = template.Must(template.New("main").Parse(mainHTML()))
+	http.Handle("/", n)
 	go func() {
 		if err := http.ListenAndServe(n.Host, nil); err != nil {
 			log.Fatalf("Could not start http server for notifications: %v", err)
@@ -166,19 +192,8 @@ func (n *Notification) Send(err error) error {
 	return exec.Command("xdg-open", url).Run()
 }
 
-func mainHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Server", idstring)
-	if err := tpl.Execute(w, nil); err != nil {
-		log.Printf("Could not execute template: %v", err)
-	}
-}
-
-func mainHTML(n *Notification) string {
-	s := `<!DOCTYPE HTML>
+func mainHTML() string {
+	s := `<!DOCTYPE HTML >
 <html>
 	<head>
 		<title>Reminder</title>
@@ -186,15 +201,10 @@ func mainHTML(n *Notification) string {
 
 	<body>
 	<script>
-`
 
-	if n.Timeout > 0 {
-		windowTimeout := n.Timeout + time.Duration(3)*time.Second
-		s = fmt.Sprintf("%s\n\tsetTimeout(window.close, %d);",
-			s, int64(windowTimeout/time.Millisecond))
-	}
-
-	s = s + `
+	{{if .WindowTimeout}}
+setTimeout(window.close, {{.WindowTimeout}});
+	{{end}}
 window.onload=function(){notify()};
 
 function enableNotify() {
@@ -223,7 +233,7 @@ function notify() {
 	var notification = window.webkitNotifications.createNotification(
 		'',
 		'gocron notification',
-		'` + n.Msg + `'
+		'{{.Noti}}'
 	);
 
 	// NOTE: the tab/window needs to be still open for the cancellation
@@ -231,19 +241,14 @@ function notify() {
 	notification.onclick = function () {
 		this.cancel();
 	};
-`
-	if n.Timeout > 0 {
-		sTimeout := fmt.Sprintf("%d", int64(n.Timeout/time.Millisecond))
-		s = s + `
+	{{if .NotiTimeout}}
 	notification.ondisplay = function(event) {
 		setTimeout(function() {
 			event.currentTarget.cancel();
-		}, ` + sTimeout + `);
+		}, {{.NotiTimeout}});
 	};
-`
-	}
+	{{end}}
 
-	s = s + `
 	notification.show();
 } 
 
@@ -251,8 +256,8 @@ function notify() {
 
 	<a id="notifyLink" href="#" onclick="enableNotify();return false;">Enable notifications?</a>
 
-	<h2> ` + n.Msg + ` </h2>
-	` + n.pageBody + `
+	<h2> {{.Noti}} </h2>
+	{{.Body}}
 	</body>
 </html>
 `
