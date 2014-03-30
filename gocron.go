@@ -18,6 +18,7 @@ import (
 )
 
 // TODO(mpl): Y U NO print job output?
+// TODO(mpl): use log format to write to File
 // TODO(mpl): docs
 
 type Cron struct {
