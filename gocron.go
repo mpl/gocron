@@ -6,19 +6,16 @@ package gocron
 import (
 	"fmt"
 	"html/template"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/smtp"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 )
 
 // TODO(mpl): Y U NO print job output?
-// TODO(mpl): use log format to write to File
 // TODO(mpl): docs
 
 type Cron struct {
@@ -33,24 +30,35 @@ func (c *Cron) Run() {
 	// TODO(mpl): maybe give the option to not have a file? meh.
 	c.File = c.File.init()
 	c.Notif.init()
+	mailchan := make(chan struct{})
 	for {
-		if err := c.Job(); err != nil {
-			if err := c.Mail.Send(err); err != nil {
-				mailFail := fmt.Errorf("Could not send mail alert %q: %v",
-					c.Mail.Msg(), err)
-				if err := c.File.WriteAlert(mailFail); err != nil {
-					log.Fatal(err)
-				}
-			}
-			if err := c.Notif.Send(err); err != nil {
+		if jobErr := c.Job(); jobErr != nil {
+			if err := c.Notif.Send(jobErr); err != nil {
 				notiFail := fmt.Errorf("Could not open notification: %v", err)
 				if err := c.File.WriteAlert(notiFail); err != nil {
 					log.Fatal(err)
 				}
 			}
-			if err := c.File.WriteAlert(err); err != nil {
+			if err := c.File.WriteAlert(jobErr); err != nil {
 				log.Fatal(err)
 			}
+			go func() {
+				if err := c.Mail.Send(jobErr); err != nil {
+					mailFail := fmt.Errorf("Could not send mail alert %q: %v",
+						c.Mail.Msg(), err)
+					if err := c.File.WriteAlert(mailFail); err != nil {
+						log.Fatal(err)
+					}
+					mailchan <- struct{}{}
+				}
+			}()
+			select {
+			case <-mailchan:
+			case <-time.After(10 * time.Second):
+				mailFail := fmt.Errorf("timed out sending mail alert %q", c.Mail.Msg())
+				c.File.WriteAlert(mailFail)
+			}
+
 		}
 		if c.Interval == 0 {
 			break
@@ -121,16 +129,16 @@ func (s *StaticFile) init() *StaticFile {
 	return s
 }
 
-func (s *StaticFile) WriteAlert(err error) error {
-	s.Msg = fmt.Sprintf("%s\n%v\n\n", s.Msg, err)
+func (s *StaticFile) WriteAlert(jobErr error) error {
+	// TODO(mpl): use s.Msg as logger prefix maybe
+	//	s.Msg = fmt.Sprintf("%s %v\n", s.Msg, err)
 	f, err := os.OpenFile(s.Path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0700)
 	if err != nil {
 		return fmt.Errorf("could not open or create file %v: %v", s.Path, err)
 	}
 	defer f.Close()
-	if _, err := io.Copy(f, strings.NewReader(s.Msg)); err != nil {
-		return fmt.Errorf("could not write message %v to file %v: %v", s.Msg, s.Path, err)
-	}
+	log.SetOutput(f)
+	log.Printf("%v", jobErr)
 	return nil
 }
 
@@ -172,8 +180,10 @@ func (n *Notification) init() {
 	if n == nil {
 		return
 	}
-	n.windowTimeout = int64((n.Timeout + time.Duration(3)*time.Second) / time.Millisecond)
-	n.notiTimeout = int64(n.Timeout / time.Millisecond)
+	if n.Timeout > 0 {
+		n.windowTimeout = int64((n.Timeout + time.Duration(3)*time.Second) / time.Millisecond)
+		n.notiTimeout = int64(n.Timeout / time.Millisecond)
+	}
 
 	n.tpl = template.Must(template.New("main").Parse(mainHTML()))
 	http.Handle("/", n)
