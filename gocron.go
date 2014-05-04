@@ -17,6 +17,8 @@ import (
 
 // TODO(mpl): Y U NO print job output?
 // TODO(mpl): docs
+// TODO(mpl): option to skip running if previous run is still running.
+// Activity detection as well? probably not.
 
 type Cron struct {
 	Interval time.Duration
