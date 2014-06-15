@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/smtp"
 	"os"
@@ -78,6 +79,9 @@ type MailAlert struct {
 }
 
 func (m *MailAlert) Msg() string {
+	if m == nil {
+		return ""
+	}
 	return m.msg
 }
 
@@ -188,12 +192,26 @@ func (n *Notification) init() {
 	}
 
 	n.tpl = template.Must(template.New("main").Parse(mainHTML()))
-	http.Handle("/", n)
+	mux := http.NewServeMux()
+	mux.Handle("/", n)
+	hostc := make(chan struct{})
 	go func() {
-		if err := http.ListenAndServe(n.Host, nil); err != nil {
+		addr, err := net.ResolveTCPAddr("tcp", n.Host)
+		if err != nil {
+			log.Fatal(err)
+		}
+		listener, err := net.ListenTCP("tcp", addr)
+		if err != nil {
+			log.Fatal(err)
+		}
+		n.Host = listener.Addr().String()
+		hostc <- struct{}{}
+		if err := http.Serve(listener, mux); err != nil {
 			log.Fatalf("Could not start http server for notifications: %v", err)
 		}
 	}()
+	<-hostc
+
 }
 
 func (n *Notification) Send(err error) error {
