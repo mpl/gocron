@@ -1,3 +1,5 @@
+// Copyright 2018 Mathieu Lonjaret
+
 // Package gocron allows to regularly run a job, and to be notified,
 // when that run failed. Notifications can happen through e-mail, browser
 // notifications, or a local file.
@@ -16,7 +18,7 @@ import (
 	"time"
 )
 
-// TODO(mpl): Y U NO print job output?
+// TODO(mpl): fix notifications.
 // TODO(mpl): docs
 // TODO(mpl): option to skip running if previous run is still running.
 // Activity detection as well? probably not.
@@ -45,21 +47,26 @@ func (c *Cron) Run() {
 			if err := c.File.WriteAlert(jobErr); err != nil {
 				log.Fatal(err)
 			}
-			go func() {
-				if err := c.Mail.Send(jobErr); err != nil {
-					mailFail := fmt.Errorf("Could not send mail alert %q: %v",
-						c.Mail.Msg(), err)
-					if err := c.File.WriteAlert(mailFail); err != nil {
-						log.Fatal(err)
+			// TODO(mpl): c.Mail.Send indeed does check that c.Mail is not nil, but I don't
+			// want the time out message in the log if we did not even try to send e-mail.
+			// Better fix later.
+			if c.Mail != nil {
+				go func() {
+					if err := c.Mail.Send(jobErr); err != nil {
+						mailFail := fmt.Errorf("Could not send mail alert %q: %v",
+							c.Mail.Msg(), err)
+						if err := c.File.WriteAlert(mailFail); err != nil {
+							log.Fatal(err)
+						}
+						mailchan <- struct{}{}
 					}
-					mailchan <- struct{}{}
+				}()
+				select {
+				case <-mailchan:
+				case <-time.After(10 * time.Second):
+					mailFail := fmt.Errorf("timed out sending mail alert %q", c.Mail.Msg())
+					c.File.WriteAlert(mailFail)
 				}
-			}()
-			select {
-			case <-mailchan:
-			case <-time.After(10 * time.Second):
-				mailFail := fmt.Errorf("timed out sending mail alert %q", c.Mail.Msg())
-				c.File.WriteAlert(mailFail)
 			}
 
 		}
@@ -211,7 +218,6 @@ func (n *Notification) init() {
 		}
 	}()
 	<-hostc
-
 }
 
 func (n *Notification) Send(err error) error {
