@@ -15,6 +15,7 @@ import (
 	"net/smtp"
 	"os"
 	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -25,6 +26,7 @@ import (
 
 type Cron struct {
 	Interval time.Duration
+	LifeTime time.Duration // if set, we (and our webserver) exit after this time
 	Job      func() error
 	Mail     *MailAlert
 	Notif    *Notification
@@ -32,6 +34,7 @@ type Cron struct {
 }
 
 func (c *Cron) Run() {
+	start := time.Now()
 	// TODO(mpl): maybe give the option to not have a file? meh.
 	c.File = c.File.init()
 	c.Notif.init()
@@ -70,10 +73,15 @@ func (c *Cron) Run() {
 			}
 
 		}
+		// TODO(mpl): maybe remove this, now that we have LifeTime. But it is breaking,
+		// so think about it.
 		if c.Interval == 0 {
 			break
 		}
 		time.Sleep(c.Interval)
+		if time.Now().After(start.Add(c.LifeTime)) {
+			return
+		}
 	}
 }
 
@@ -160,7 +168,7 @@ const idstring = "http://golang.org/pkg/http/#ListenAndServe"
 type Notification struct {
 	Host          string
 	Msg           string
-	Timeout       time.Duration
+	Timeout       time.Duration // if set, we close the tab after this duration
 	tpl           *template.Template
 	pageBody      string
 	windowTimeout int64
@@ -176,16 +184,15 @@ func (n *Notification) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Noti          string
 		Body          string
 		WindowTimeout int64
-		NotiTimeout   int64
 	}{
 		Noti:          n.Msg,
 		Body:          n.pageBody,
 		WindowTimeout: n.windowTimeout,
-		NotiTimeout:   n.notiTimeout,
 	}
 	w.Header().Set("Server", idstring)
 	if err := n.tpl.Execute(w, &data); err != nil {
-		log.Printf("Could not execute template: %v", err)
+		println(fmt.Sprintf("Could not execute template: %v", err))
+		//		log.Printf("Could not execute template: %v", err)
 	}
 }
 
@@ -212,6 +219,7 @@ func (n *Notification) init() {
 			log.Fatal(err)
 		}
 		n.Host = listener.Addr().String()
+		// TODO(mpl): I dont think this fake synchro is actually useful.
 		hostc <- struct{}{}
 		if err := http.Serve(listener, mux); err != nil {
 			log.Fatalf("Could not start http server for notifications: %v", err)
@@ -226,7 +234,11 @@ func (n *Notification) Send(err error) error {
 	}
 	n.pageBody = fmt.Sprintf("%v", err)
 	url := "http://" + n.Host
-	return exec.Command("xdg-open", url).Run()
+	cmd := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		cmd = "open"
+	}
+	return exec.Command(cmd, url).Run()
 }
 
 func mainHTML() string {
@@ -242,56 +254,39 @@ func mainHTML() string {
 	{{if .WindowTimeout}}
 setTimeout(window.close, {{.WindowTimeout}});
 	{{end}}
-window.onload=function(){notify()};
+window.onload=function(){notify('{{.Noti}}')};
 
-function enableNotify() {
-	if (!(window.webkitNotifications)) {
-		alert("Notifications not supported on this browser.");
+function notify(notiBody) {
+	if (!("Notification" in window)) {
+		console.log("Notifications not supported on this browser.");
 		return;
 	}
-	var havePermission = window.webkitNotifications.checkPermission();
-	if (havePermission == 0) {
-		alert("Notifications already allowed.");
+
+	// Let's check whether notification permissions have already been granted
+	if (Notification.permission === "granted") {
+		// If it's okay let's create a notification
+		var notification = new Notification('gocron notification', { body: notiBody});
+//		var notification = new Notification('gocron notification', { body: 'blabla'});
 		return;
 	}
-	window.webkitNotifications.requestPermission();
-}
 
-function notify() {
-	if (!(window.webkitNotifications)) {
-		console.log("Notifications not supported");
-		return;
+	// Otherwise, we need to ask the user for permission
+	if (Notification.permission !== "denied") {
+		Notification.requestPermission().then(function (permission) {
+			// If the user accepts, let's create a notification
+			if (permission === "granted") {
+				var notification = new Notification('gocron notification', { body: notiBody});
+//				var notification = new Notification('gocron notification', { body: 'blabla'});
+			} else {
+				console.log("Notifications are denied.");
+			}
+		});
 	}
-	var havePermission = window.webkitNotifications.checkPermission();
-	if (havePermission != 0) {
-		console.log("Notifications not allowed.");
-		return;
-	}
-	var notification = window.webkitNotifications.createNotification(
-		'',
-		'gocron notification',
-		'{{.Noti}}'
-	);
-
-	// NOTE: the tab/window needs to be still open for the cancellation
-	// of the notification to work.
-	notification.onclick = function () {
-		this.cancel();
-	};
-	{{if .NotiTimeout}}
-	notification.ondisplay = function(event) {
-		setTimeout(function() {
-			event.currentTarget.cancel();
-		}, {{.NotiTimeout}});
-	};
-	{{end}}
-
-	notification.show();
 } 
 
 	</script>
 
-	<a id="notifyLink" href="#" onclick="enableNotify();return false;">Enable notifications?</a>
+	<a id="notifyLink" href="#" onclick="notify('notifications are enabled');return false;">Enable notifications?</a>
 
 	<h2> {{.Noti}} </h2>
 	{{.Body}}

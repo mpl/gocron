@@ -1,43 +1,26 @@
 package main
 
 import (
-	"flag"
-	"log"
-	"os/exec"
+	//	"os/exec"
+	"errors"
 	"time"
 
 	"github.com/mpl/gocron"
 )
 
 func main() {
-	flag.Parse()
-	args := flag.Args()
-	if len(args) < 1 {
-		log.Fatal("need a command as argument")
-	}
 	job := func() error {
-		cmd := exec.Command(args[0], args[1:]...)
-		err := cmd.Run()
-		time.Sleep(time.Second)
-		return err
+		return errors.New("syncblobs -interval=0 -askauth=true -debug=true")
+		// return exec.Command("open", "http://localhost:8082").Run()
 	}
 	cron := gocron.Cron{
-		Interval: time.Minute,
+		Interval: 1 * time.Minute,
+		LifeTime: 30 * time.Second, // so it will actually die before the next run
 		Job:      job,
-		Mail: &gocron.MailAlert{
-			Subject: "Gocron error test",
-			To:      []string{"pony@foo.com"},
-			From:    "unicorn@bar.com",
-			SMTP:    "localhost:25",
-		},
 		Notif: &gocron.Notification{
 			Host:    "localhost:8082",
-			Msg:     "job error",
-			Timeout: 10 * time.Second,
-		},
-		File: &gocron.StaticFile{
-			Path: "gocron.log",
-			Msg:  "gocron error",
+			Msg:     "Syncblobs reminder",
+			Timeout: 5 * time.Minute,
 		},
 	}
 	cron.Run()
