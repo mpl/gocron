@@ -19,7 +19,6 @@ import (
 	"time"
 )
 
-// TODO(mpl): fix notifications.
 // TODO(mpl): docs
 // TODO(mpl): option to skip running if previous run is still running.
 // Activity detection as well? probably not.
@@ -192,7 +191,6 @@ func (n *Notification) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Server", idstring)
 	if err := n.tpl.Execute(w, &data); err != nil {
 		println(fmt.Sprintf("Could not execute template: %v", err))
-		//		log.Printf("Could not execute template: %v", err)
 	}
 }
 
@@ -266,7 +264,6 @@ function notify(notiBody) {
 	if (Notification.permission === "granted") {
 		// If it's okay let's create a notification
 		var notification = new Notification('gocron notification', { body: notiBody});
-//		var notification = new Notification('gocron notification', { body: 'blabla'});
 		return;
 	}
 
@@ -276,7 +273,6 @@ function notify(notiBody) {
 			// If the user accepts, let's create a notification
 			if (permission === "granted") {
 				var notification = new Notification('gocron notification', { body: notiBody});
-//				var notification = new Notification('gocron notification', { body: 'blabla'});
 			} else {
 				console.log("Notifications are denied.");
 			}

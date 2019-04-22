@@ -1,7 +1,6 @@
 package main
 
 import (
-	//	"os/exec"
 	"errors"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 func main() {
 	job := func() error {
 		return errors.New("syncblobs -interval=0 -askauth=true -debug=true")
-		// return exec.Command("open", "http://localhost:8082").Run()
 	}
 	cron := gocron.Cron{
 		Interval: 1 * time.Minute,
@@ -20,7 +18,7 @@ func main() {
 		Notif: &gocron.Notification{
 			Host:    "localhost:8082",
 			Msg:     "Syncblobs reminder",
-			Timeout: 5 * time.Minute,
+			Timeout: 5 * time.Minute, // how long the browser tab will remain open
 		},
 	}
 	cron.Run()
