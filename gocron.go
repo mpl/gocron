@@ -208,6 +208,7 @@ func (n *Notification) init() {
 	mux.Handle("/", n)
 	hostc := make(chan struct{})
 	go func() {
+		// TODO(mpl): shutdown (conns) properly when we die?
 		addr, err := net.ResolveTCPAddr("tcp", n.Host)
 		if err != nil {
 			log.Fatal(err)
