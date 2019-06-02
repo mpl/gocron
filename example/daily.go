@@ -34,6 +34,10 @@ func skipToday() (bool, error) {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		println("syncblobs -interval=0 -askauth=true -debug=true")
+		os.Exit(1)
+	}
 	notToday, err := skipToday()
 	if err != nil {
 		log.Fatal(err)
