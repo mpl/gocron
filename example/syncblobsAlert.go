@@ -2,12 +2,18 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/mpl/gocron"
+)
+
+var (
+	from = flag.Bool("from", false, "Print the source path for this program")
+	command = flag.Bool("command", false, "Print the syncblobs command")
 )
 
 func skipToday() (bool, error) {
@@ -34,7 +40,12 @@ func skipToday() (bool, error) {
 }
 
 func main() {
-	if len(os.Args) > 1 {
+	flag.Parse()
+	if *from {
+		println("github.com/mpl/gocron/example")
+		os.Exit(1)
+	}
+	if *command {
 		println("syncblobs -interval=0 -askauth=true -debug=true")
 		os.Exit(1)
 	}
